@@ -223,18 +223,28 @@ fun ArchetypeGame() {
                     if (turnCount % 3 == 0) novaUsesInWindow = 0
                     updateCharacterStats(text)
                 }
-                "start_game" -> { if (!isHost) phase = Phase.LOBBY }
+                "start_game" -> {
+                    if (!isHost) {
+                        story = emptyList(); characters = emptyList(); scene = ""
+                        turnCount = 0; currentRole = Role.NARRATOR
+                        phase = Phase.SETUP
+                    }
+                }
                 "submit_character" -> {
                     // Host receives character from a remote player
                     if (isHost) {
                         val c = msg.getJSONObject("character")
-                        val char = GameCharacter(
-                            c.getString("name"),
-                            (0 until c.getJSONArray("traits").length()).map { c.getJSONArray("traits").getString(it) },
-                            (0 until c.getJSONArray("flaws").length()).map { c.getJSONArray("flaws").getString(it) },
-                            c.getString("wildcard"),
-                            Role.valueOf(c.getString("createdBy")),
-                            c.getString("img").ifBlank { null })
+                        val role = Role.valueOf(c.getString("createdBy"))
+                        var imgUrl = c.getString("img").ifBlank { null }
+                        val traits = (0 until c.getJSONArray("traits").length()).map { c.getJSONArray("traits").getString(it) }
+                        val flaws = (0 until c.getJSONArray("flaws").length()).map { c.getJSONArray("flaws").getString(it) }
+                        val name = c.getString("name")
+                        // Regenerate image URL if missing
+                        if (imgUrl == null) {
+                            val gender = playerGenders[role] ?: Gender.MALE
+                            imgUrl = Nova.characterImageUrl(name, traits, flaws, scene, gender)
+                        }
+                        val char = GameCharacter(name, traits, flaws, c.getString("wildcard"), role, imgUrl)
                         characters = characters + char
                         if (characters.size >= playerCount) {
                             addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
@@ -292,7 +302,14 @@ fun ArchetypeGame() {
                     onNew = { newGame() },
                     onSolo = { newGame(solo = true) },
                     onResume = { SaveManager.load(ctx)?.let { loadState(it) } },
-                    onMultiplayer = { host, _ -> isHost = host; phase = Phase.LOBBY }
+                    onMultiplayer = { host, _ ->
+                        isHost = host
+                        // Clear any stale saved state to prevent dupe scenes
+                        story = emptyList(); characters = emptyList(); scene = ""
+                        turnCount = 0; currentRole = Role.NARRATOR
+                        SaveManager.delete(ctx)
+                        phase = Phase.LOBBY
+                    }
                 )
                 Phase.LOBBY -> LobbyScreen(
                     isHost = isHost,

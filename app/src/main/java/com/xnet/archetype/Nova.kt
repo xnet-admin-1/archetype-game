@@ -61,9 +61,9 @@ Rules:
         val messages = JSONArray().apply {
             put(JSONObject().put("role", "system").put("content",
                 "You create unique story settings. Respond with ONLY a short scene name (2-4 words) and a one-sentence description separated by a newline. Be creative and unexpected.$avoid"))
-            put(JSONObject().put("role", "user").put("content", "Generate a unique story setting unlike anything common."))
+            put(JSONObject().put("role", "user").put("content", "Generate a unique story setting unlike anything common. Random seed: ${System.currentTimeMillis()}"))
         }
-        val result = callNova(messages)
+        val result = callNova(messages, seed = (System.currentTimeMillis() % Int.MAX_VALUE).toInt())
         generatedScenes.add(result.lines().first())
         result
     }
@@ -119,7 +119,7 @@ Rules:
         if (result.equals("NONE", ignoreCase = true) || result.isBlank()) null else result
     }
 
-    private fun callNova(messages: JSONArray): String {
+    private fun callNova(messages: JSONArray, seed: Int? = null): String {
         val body = JSONObject().apply {
             put("model", "nova-fast")
             put("messages", messages)
@@ -128,6 +128,7 @@ Rules:
             put("presence_penalty", 0.8)
             put("frequency_penalty", 0.5)
             put("stream", false)
+            if (seed != null) put("seed", seed)
         }.toString()
 
         val request = Request.Builder()
