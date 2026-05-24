@@ -403,3 +403,14 @@ fun CharacterScreen(characters: List<GameCharacter>, currentRole: Role, scene: S
         }
     }
 }
+
+@Composable
+fun WaitingForHostScreen(message: String) {
+    Column(Modifier.fillMaxSize().padding(24.dp), Arrangement.Center, Alignment.CenterHorizontally) {
+        CircularProgressIndicator(color = NovaColor)
+        Spacer(Modifier.height(16.dp))
+        Text(message, color = Color.White, fontSize = 16.sp)
+        Spacer(Modifier.height(8.dp))
+        Text("You'll be synced automatically when the host is ready.", color = Color.Gray, fontSize = 13.sp)
+    }
+}
