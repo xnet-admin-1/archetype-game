@@ -224,6 +224,25 @@ fun ArchetypeGame() {
                     updateCharacterStats(text)
                 }
                 "start_game" -> { if (!isHost) phase = Phase.LOBBY }
+                "submit_character" -> {
+                    // Host receives character from a remote player
+                    if (isHost) {
+                        val c = msg.getJSONObject("character")
+                        val char = GameCharacter(
+                            c.getString("name"),
+                            (0 until c.getJSONArray("traits").length()).map { c.getJSONArray("traits").getString(it) },
+                            (0 until c.getJSONArray("flaws").length()).map { c.getJSONArray("flaws").getString(it) },
+                            c.getString("wildcard"),
+                            Role.valueOf(c.getString("createdBy")),
+                            c.getString("img").ifBlank { null })
+                        characters = characters + char
+                        if (characters.size >= playerCount) {
+                            addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
+                            phase = Phase.PLAY
+                            currentRole = activeRoles.first()
+                        }
+                    }
+                }
                 "game_state" -> {
                     if (!isHost) {
                         scene = msg.getString("scene")
@@ -305,7 +324,7 @@ fun ArchetypeGame() {
                             onBack = { phase = Phase.MENU }
                         )
                     } else {
-                        WaitingForHostScreen("Host is setting up the game...")
+                        WaitingForHostScreen("Host is setting up the game...", scene)
                     }
                 }
                 Phase.SCENE -> {
@@ -319,42 +338,64 @@ fun ArchetypeGame() {
                             onBack = { phase = Phase.SETUP }
                         )
                     } else {
-                        WaitingForHostScreen("Host is writing the opening scene...")
+                        WaitingForHostScreen("Host is writing the opening scene...", scene)
                     }
                 }
                 Phase.CHARACTERS -> {
-                    if (isHost || GameSync.state == SyncState.DISCONNECTED) {
-                        CharacterScreen(characters, currentRole, scene,
+                    // Determine which role this player is
+                    val myRole = if (isHost) Role.NARRATOR else {
+                        val playerIdx = GameSync.connectedPlayers.indexOf(GameSync.playerName)
+                        activeRoles.getOrElse(playerIdx) { Role.ARCHITECT }
+                    }
+                    val alreadySubmitted = characters.any { it.createdBy == myRole }
+
+                    if (alreadySubmitted) {
+                        WaitingForHostScreen("Waiting for other players to create characters... (${characters.size}/$playerCount)")
+                    } else {
+                        CharacterScreen(characters, myRole, scene,
                             onAdd = { char ->
-                                val gender = playerGenders[currentRole] ?: Gender.MALE
+                                val gender = playerGenders[myRole] ?: Gender.MALE
                                 val img = Nova.characterImageUrl(char.name, char.traits, char.flaws, scene, gender)
-                                characters = characters + char.copy(imageUrl = img)
-                                currentRole = nextRole()
-                                if (soloMode && currentRole == Role.ARCHITECT && characters.size < playerCount + 1) {
-                                    scope.launch {
-                                        novaLoading = true
-                                        val name = "Nova's Character"
-                                        val traits = Nova.suggestTraits(name, scene)
-                                        val flaws = Nova.suggestFlaws(name, scene)
-                                        val wc = Nova.suggestWildcard(name, scene)
-                                        val arcGender = playerGenders[Role.ARCHITECT] ?: Gender.FEMALE
-                                        val arcImg = Nova.characterImageUrl(name, traits, flaws, scene, arcGender)
-                                        characters = characters + GameCharacter(name, traits, flaws, wc, Role.ARCHITECT, arcImg)
-                                        currentRole = activeRoles.first()
-                                        novaLoading = false
+                                val finalChar = char.copy(imageUrl = img, createdBy = myRole)
+
+                                if (isHost) {
+                                    characters = characters + finalChar
+                                    if (soloMode && characters.size < playerCount) {
+                                        scope.launch {
+                                            novaLoading = true
+                                            val name = "Nova's Character"
+                                            val traits = Nova.suggestTraits(name, scene)
+                                            val flaws = Nova.suggestFlaws(name, scene)
+                                            val wc = Nova.suggestWildcard(name, scene)
+                                            val arcGender = playerGenders[Role.ARCHITECT] ?: Gender.FEMALE
+                                            val arcImg = Nova.characterImageUrl(name, traits, flaws, scene, arcGender)
+                                            characters = characters + GameCharacter(name, traits, flaws, wc, Role.ARCHITECT, arcImg)
+                                            currentRole = activeRoles.first()
+                                            novaLoading = false
+                                            addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
+                                            phase = Phase.PLAY
+                                        }
+                                    } else if (characters.size >= playerCount) {
                                         addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
                                         phase = Phase.PLAY
+                                        currentRole = activeRoles.first()
                                     }
-                                } else if (characters.size >= playerCount) {
-                                    addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
-                                    phase = Phase.PLAY
-                                    currentRole = activeRoles.first()
+                                } else {
+                                    // Send character to host
+                                    GameSync.send("submit_character", org.json.JSONObject()
+                                        .put("character", org.json.JSONObject()
+                                            .put("name", finalChar.name)
+                                            .put("traits", org.json.JSONArray(finalChar.traits))
+                                            .put("flaws", org.json.JSONArray(finalChar.flaws))
+                                            .put("wildcard", finalChar.wildcard)
+                                            .put("createdBy", finalChar.createdBy.name)
+                                            .put("img", finalChar.imageUrl ?: "")))
+                                    // Optimistically add locally
+                                    characters = characters + finalChar
                                 }
                             },
-                            onBack = { phase = Phase.SCENE }
+                            onBack = { if (isHost) phase = Phase.SCENE }
                         )
-                    } else {
-                        WaitingForHostScreen("Host is creating characters...")
                     }
                 }
                 Phase.PLAY -> PlayScreen(
