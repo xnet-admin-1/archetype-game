@@ -278,52 +278,92 @@ fun ConflictScreen(onResult: (String) -> Unit) {
 fun DebriefScreen(story: List<StoryEntry>, characters: List<GameCharacter>, scene: String, onFinish: () -> Unit) {
     var questions by remember { mutableStateOf(listOf<String>()) }
     var loading by remember { mutableStateOf(true) }
+    var chatInput by remember { mutableStateOf("") }
+    val chatMessages = remember { mutableStateListOf<LobbyMessage>() }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val isMultiplayer = GameSync.state != SyncState.DISCONNECTED
 
     LaunchedEffect(Unit) {
         questions = Nova.generateDebrief(story, characters, scene)
         loading = false
     }
 
-    LazyColumn(Modifier.fillMaxSize().padding(24.dp)) {
-        item {
-            Text("📖 Story Complete", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Spacer(Modifier.height(16.dp))
+    LaunchedEffect(Unit) {
+        if (isMultiplayer) {
+            GameSync.lobbyChat.collect { msg ->
+                chatMessages.add(msg)
+                scope.launch { if (chatMessages.isNotEmpty()) listState.animateScrollToItem(chatMessages.size - 1) }
+            }
         }
-        items(characters) { c ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = SurfaceDark)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    c.imageUrl?.let {
-                        AsyncImage(it, c.name, Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                        Spacer(Modifier.width(12.dp))
-                    }
-                    Column {
-                        Text(c.name, fontWeight = FontWeight.Bold, color = c.createdBy.color, fontSize = 16.sp)
-                        Text("+ ${c.traits.joinToString(" · ")}", color = SystemColor, fontSize = 12.sp)
-                        Text("− ${c.flaws.joinToString(" · ")}", color = Color(0xFFEF5350), fontSize = 12.sp)
-                        if (c.wildcard.isNotBlank()) Text("✦ ${c.wildcard}", color = NovaColor, fontSize = 12.sp)
+    }
+
+    Column(Modifier.fillMaxSize().padding(24.dp)) {
+        LazyColumn(Modifier.weight(1f)) {
+            item {
+                Text("📖 Story Complete", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Spacer(Modifier.height(16.dp))
+            }
+            items(characters) { c ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = SurfaceDark)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        c.imageUrl?.let {
+                            AsyncImage(it, c.name, Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Column {
+                            Text(c.name, fontWeight = FontWeight.Bold, color = c.createdBy.color, fontSize = 16.sp)
+                            Text("+ ${c.traits.joinToString(" · ")}", color = SystemColor, fontSize = 12.sp)
+                            Text("− ${c.flaws.joinToString(" · ")}", color = Color(0xFFEF5350), fontSize = 12.sp)
+                            if (c.wildcard.isNotBlank()) Text("✦ ${c.wildcard}", color = NovaColor, fontSize = 12.sp)
+                        }
                     }
                 }
             }
-        }
-        item {
-            Spacer(Modifier.height(16.dp))
-            val nt = story.count { it.role == Role.NARRATOR }
-            val at = story.count { it.role == Role.ARCHITECT }
-            val nova = story.count { it.role == Role.NOVA }
-            Text("Narrator: $nt turns", color = NarratorColor)
-            Text("Architect: $at turns", color = ArchitectColor)
-            Text("Nova sparks: $nova", color = NovaColor)
-            Spacer(Modifier.height(16.dp))
-            Text("Debrief", fontSize = 16.sp, color = SystemColor, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            if (loading) {
-                Text("Generating questions...", color = Color.Gray, fontStyle = FontStyle.Italic)
-            } else {
-                questions.forEach { Text("• $it", color = Color.White, modifier = Modifier.padding(vertical = 4.dp)) }
+            item {
+                Spacer(Modifier.height(16.dp))
+                val nt = story.count { it.role == Role.NARRATOR }
+                val at = story.count { it.role == Role.ARCHITECT }
+                val nova = story.count { it.role == Role.NOVA }
+                Text("Narrator: $nt turns", color = NarratorColor)
+                Text("Architect: $at turns", color = ArchitectColor)
+                Text("Nova sparks: $nova", color = NovaColor)
+                Spacer(Modifier.height(16.dp))
+                Text("Closing Questions", fontSize = 16.sp, color = SystemColor, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                if (loading) {
+                    Text("Generating questions...", color = Color.Gray, fontStyle = FontStyle.Italic)
+                } else {
+                    questions.forEach { Text("• $it", color = Color.White, modifier = Modifier.padding(vertical = 4.dp)) }
+                }
             }
-            Spacer(Modifier.height(24.dp))
-            Button(onFinish, Modifier.fillMaxWidth()) { Text("Continue to Post-Game") }
+            if (isMultiplayer) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Text("Discussion", fontSize = 16.sp, color = NarratorColor, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                }
+                items(chatMessages.toList()) { msg ->
+                    val isMe = msg.sender == GameSync.playerName
+                    Text("${msg.sender}: ${msg.text}",
+                        color = if (isMe) NarratorColor else Color.White, fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 2.dp))
+                }
+            }
         }
+        if (isMultiplayer) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(chatInput, { chatInput = it }, Modifier.weight(1f),
+                    placeholder = { Text("Discuss...") }, maxLines = 2)
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    if (chatInput.isNotBlank()) { GameSync.sendChat(chatInput); chatInput = "" }
+                }) { Text("→") }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(onFinish, Modifier.fillMaxWidth()) { Text("Finish", fontSize = 16.sp) }
     }
 }
 

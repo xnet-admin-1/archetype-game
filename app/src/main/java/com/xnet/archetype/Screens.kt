@@ -87,7 +87,8 @@ fun MenuScreen(hasSave: Boolean, onNew: () -> Unit, onSolo: () -> Unit, onResume
 }
 
 @Composable
-fun LobbyScreen(isHost: Boolean, onStart: () -> Unit, onBack: () -> Unit) {
+fun LobbyScreen(isHost: Boolean, onStart: () -> Unit, onBack: () -> Unit,
+                playerCount: Int = 2, onPlayerCountChange: (Int) -> Unit = {}) {
     BackHandler { onBack() }
     var chatInput by remember { mutableStateOf("") }
     val chatMessages = remember { mutableStateListOf<LobbyMessage>() }
@@ -151,6 +152,13 @@ fun LobbyScreen(isHost: Boolean, onStart: () -> Unit, onBack: () -> Unit) {
         }
         Spacer(Modifier.height(12.dp))
         if (isHost) {
+            Text("Players in game", color = Color.Gray, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (2..4).forEach { n ->
+                    FilterChip(playerCount == n, { onPlayerCountChange(n) }, label = { Text("$n") })
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Button(onStart, Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = SystemColor)
             ) { Text("Start Game", color = Color.Black, fontSize = 16.sp) }

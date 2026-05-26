@@ -225,13 +225,17 @@ fun ArchetypeGame() {
                 }
                 "start_game" -> {
                     if (!isHost) {
+                        // Host pressed start — receive config and go to character creation
+                        playerCount = msg.optInt("playerCount", 2)
+                        activeRoles = msg.optJSONArray("activeRoles")?.let { arr ->
+                            (0 until arr.length()).map { Role.valueOf(arr.getString(it)) }
+                        } ?: listOf(Role.NARRATOR, Role.ARCHITECT)
                         story = emptyList(); characters = emptyList(); scene = ""
                         turnCount = 0; currentRole = Role.NARRATOR
-                        phase = Phase.SETUP
+                        phase = Phase.CHARACTERS
                     }
                 }
                 "submit_character" -> {
-                    // Host receives character from a remote player
                     if (isHost) {
                         val c = msg.getJSONObject("character")
                         val role = Role.valueOf(c.getString("createdBy"))
@@ -239,18 +243,12 @@ fun ArchetypeGame() {
                         val traits = (0 until c.getJSONArray("traits").length()).map { c.getJSONArray("traits").getString(it) }
                         val flaws = (0 until c.getJSONArray("flaws").length()).map { c.getJSONArray("flaws").getString(it) }
                         val name = c.getString("name")
-                        // Regenerate image URL if missing
                         if (imgUrl == null) {
                             val gender = playerGenders[role] ?: Gender.MALE
                             imgUrl = Nova.characterImageUrl(name, traits, flaws, scene, gender)
                         }
                         val char = GameCharacter(name, traits, flaws, c.getString("wildcard"), role, imgUrl)
                         characters = characters + char
-                        if (characters.size >= playerCount) {
-                            addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
-                            phase = Phase.PLAY
-                            currentRole = activeRoles.first()
-                        }
                     }
                 }
                 "game_state" -> {
@@ -304,7 +302,6 @@ fun ArchetypeGame() {
                     onResume = { SaveManager.load(ctx)?.let { loadState(it) } },
                     onMultiplayer = { host, _ ->
                         isHost = host
-                        // Clear any stale saved state to prevent dupe scenes
                         story = emptyList(); characters = emptyList(); scene = ""
                         turnCount = 0; currentRole = Role.NARRATOR
                         SaveManager.delete(ctx)
@@ -314,43 +311,73 @@ fun ArchetypeGame() {
                 Phase.LOBBY -> LobbyScreen(
                     isHost = isHost,
                     onStart = {
-                        GameSync.send("start_game")
-                        newGame()
+                        // Host picks player count in lobby, then starts
+                        activeRoles = when (playerCount) {
+                            3 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER)
+                            4 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER, Role.WILDCARD)
+                            else -> listOf(Role.NARRATOR, Role.ARCHITECT)
+                        }
+                        // Broadcast start with config
+                        GameSync.send("start_game", org.json.JSONObject()
+                            .put("playerCount", playerCount)
+                            .put("activeRoles", org.json.JSONArray(activeRoles.map { it.name })))
+                        story = emptyList(); characters = emptyList(); scene = ""
+                        turnCount = 0; currentRole = Role.NARRATOR
+                        phase = Phase.CHARACTERS
                     },
-                    onBack = { GameSync.disconnect(); phase = Phase.MENU }
+                    onBack = { GameSync.disconnect(); phase = Phase.MENU },
+                    playerCount = playerCount,
+                    onPlayerCountChange = { playerCount = it }
                 )
                 Phase.SETUP -> {
+                    // In multiplayer: only host sees this (after characters)
+                    // In local/solo: normal setup screen
                     if (isHost || soloMode || GameSync.state == SyncState.DISCONNECTED) {
                         SetupScreen(
                             soloMode = soloMode,
                             onStart = { selectedScene, selectedTurns, genders, pCount, solo ->
                                 scene = selectedScene; maxTurns = selectedTurns
                                 playerGenders = genders; playerCount = pCount; soloMode = solo
-                                activeRoles = when {
-                                    solo -> listOf(Role.NARRATOR, Role.ARCHITECT)
-                                    pCount == 3 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER)
-                                    pCount == 4 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER, Role.WILDCARD)
-                                    else -> listOf(Role.NARRATOR, Role.ARCHITECT)
+                                if (GameSync.state == SyncState.DISCONNECTED && !solo) {
+                                    activeRoles = when (pCount) {
+                                        3 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER)
+                                        4 -> listOf(Role.NARRATOR, Role.ARCHITECT, Role.WEAVER, Role.WILDCARD)
+                                        else -> listOf(Role.NARRATOR, Role.ARCHITECT)
+                                    }
                                 }
                                 val img = Nova.sceneImageUrl(selectedScene)
                                 addSystem("⚔ New Story: $selectedScene", img)
                                 if (solo) addSystem("Solo mode: You are the Narrator. Nova plays as Architect.")
                                 else addSystem("${activeRoles.joinToString { it.label }} are playing. Tap ✦ when stuck.")
-                                phase = Phase.SCENE
+                                if (GameSync.state == SyncState.DISCONNECTED) {
+                                    // Local game: go to scene input
+                                    phase = Phase.SCENE
+                                } else {
+                                    // Multiplayer: host finished setup, go to scene then play
+                                    phase = Phase.SCENE
+                                }
                             },
-                            onBack = { phase = Phase.MENU }
+                            onBack = { if (GameSync.state == SyncState.DISCONNECTED) phase = Phase.MENU else phase = Phase.CHARACTERS }
                         )
                     } else {
                         WaitingForHostScreen("Host is setting up the game...", scene)
                     }
                 }
                 Phase.SCENE -> {
-                    if (isHost || GameSync.state == SyncState.DISCONNECTED) {
+                    if (isHost || soloMode || GameSync.state == SyncState.DISCONNECTED) {
                         SceneInputScreen(scene,
                             onSubmit = { text ->
                                 val entry = StoryEntry(Role.NARRATOR, text, characterName = null, characterImg = null)
                                 commitEntry(entry)
-                                phase = Phase.CHARACTERS
+                                if (GameSync.state == SyncState.DISCONNECTED) {
+                                    // Local: go to characters next
+                                    phase = Phase.CHARACTERS
+                                } else {
+                                    // Multiplayer: everyone goes to PLAY
+                                    addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
+                                    phase = Phase.PLAY
+                                    currentRole = activeRoles.first()
+                                }
                             },
                             onBack = { phase = Phase.SETUP }
                         )
@@ -359,60 +386,81 @@ fun ArchetypeGame() {
                     }
                 }
                 Phase.CHARACTERS -> {
-                    // Determine which role this player is
-                    val myRole = if (isHost) Role.NARRATOR else {
-                        val playerIdx = GameSync.connectedPlayers.indexOf(GameSync.playerName)
-                        activeRoles.getOrElse(playerIdx) { Role.ARCHITECT }
-                    }
-                    val alreadySubmitted = characters.any { it.createdBy == myRole }
-
-                    if (alreadySubmitted) {
-                        WaitingForHostScreen("Waiting for other players to create characters... (${characters.size}/$playerCount)")
-                    } else {
-                        CharacterScreen(characters, myRole, scene,
+                    if (GameSync.state == SyncState.DISCONNECTED) {
+                        // Local game: host creates all characters sequentially
+                        CharacterScreen(characters, currentRole, scene,
                             onAdd = { char ->
-                                val gender = playerGenders[myRole] ?: Gender.MALE
+                                val gender = playerGenders[currentRole] ?: Gender.MALE
                                 val img = Nova.characterImageUrl(char.name, char.traits, char.flaws, scene, gender)
-                                val finalChar = char.copy(imageUrl = img, createdBy = myRole)
-
-                                if (isHost) {
-                                    characters = characters + finalChar
-                                    if (soloMode && characters.size < playerCount) {
-                                        scope.launch {
-                                            novaLoading = true
-                                            val name = "Nova's Character"
-                                            val traits = Nova.suggestTraits(name, scene)
-                                            val flaws = Nova.suggestFlaws(name, scene)
-                                            val wc = Nova.suggestWildcard(name, scene)
-                                            val arcGender = playerGenders[Role.ARCHITECT] ?: Gender.FEMALE
-                                            val arcImg = Nova.characterImageUrl(name, traits, flaws, scene, arcGender)
-                                            characters = characters + GameCharacter(name, traits, flaws, wc, Role.ARCHITECT, arcImg)
-                                            currentRole = activeRoles.first()
-                                            novaLoading = false
-                                            addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
-                                            phase = Phase.PLAY
-                                        }
-                                    } else if (characters.size >= playerCount) {
+                                characters = characters + char.copy(imageUrl = img)
+                                currentRole = nextRole()
+                                if (soloMode && currentRole == Role.ARCHITECT && characters.size < playerCount) {
+                                    scope.launch {
+                                        novaLoading = true
+                                        val name = "Nova's Character"
+                                        val traits = Nova.suggestTraits(name, scene)
+                                        val flaws = Nova.suggestFlaws(name, scene)
+                                        val wc = Nova.suggestWildcard(name, scene)
+                                        val arcGender = playerGenders[Role.ARCHITECT] ?: Gender.FEMALE
+                                        val arcImg = Nova.characterImageUrl(name, traits, flaws, scene, arcGender)
+                                        characters = characters + GameCharacter(name, traits, flaws, wc, Role.ARCHITECT, arcImg)
+                                        currentRole = activeRoles.first()
+                                        novaLoading = false
                                         addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
                                         phase = Phase.PLAY
-                                        currentRole = activeRoles.first()
                                     }
-                                } else {
-                                    // Send character to host
-                                    GameSync.send("submit_character", org.json.JSONObject()
-                                        .put("character", org.json.JSONObject()
-                                            .put("name", finalChar.name)
-                                            .put("traits", org.json.JSONArray(finalChar.traits))
-                                            .put("flaws", org.json.JSONArray(finalChar.flaws))
-                                            .put("wildcard", finalChar.wildcard)
-                                            .put("createdBy", finalChar.createdBy.name)
-                                            .put("img", finalChar.imageUrl ?: "")))
-                                    // Optimistically add locally
-                                    characters = characters + finalChar
+                                } else if (characters.size >= playerCount) {
+                                    addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
+                                    phase = Phase.PLAY
+                                    currentRole = activeRoles.first()
                                 }
                             },
-                            onBack = { if (isHost) phase = Phase.SCENE }
+                            onBack = { phase = Phase.SCENE }
                         )
+                    } else {
+                        // Multiplayer: each player creates their own character
+                        val myRole = if (isHost) Role.NARRATOR else {
+                            val playerIdx = GameSync.connectedPlayers.indexOf(GameSync.playerName)
+                            activeRoles.getOrElse(playerIdx) { Role.ARCHITECT }
+                        }
+                        val alreadySubmitted = characters.any { it.createdBy == myRole }
+
+                        if (alreadySubmitted) {
+                            if (isHost && characters.size >= playerCount) {
+                                // Host has all characters, move to setup
+                                LaunchedEffect(characters.size) { phase = Phase.SETUP }
+                            }
+                            WaitingForHostScreen(
+                                if (isHost) "Waiting for players... (${characters.size}/$playerCount)"
+                                else "Waiting for other players... (${characters.size}/$playerCount)", scene)
+                        } else {
+                            CharacterScreen(characters, myRole, scene,
+                                onAdd = { char ->
+                                    val gender = playerGenders[myRole] ?: Gender.MALE
+                                    val img = Nova.characterImageUrl(char.name, char.traits, char.flaws, scene, gender)
+                                    val finalChar = char.copy(imageUrl = img, createdBy = myRole)
+
+                                    if (isHost) {
+                                        characters = characters + finalChar
+                                        // If all characters are in, move to setup
+                                        if (characters.size >= playerCount) {
+                                            phase = Phase.SETUP
+                                        }
+                                    } else {
+                                        GameSync.send("submit_character", org.json.JSONObject()
+                                            .put("character", org.json.JSONObject()
+                                                .put("name", finalChar.name)
+                                                .put("traits", org.json.JSONArray(finalChar.traits))
+                                                .put("flaws", org.json.JSONArray(finalChar.flaws))
+                                                .put("wildcard", finalChar.wildcard)
+                                                .put("createdBy", finalChar.createdBy.name)
+                                                .put("img", finalChar.imageUrl ?: "")))
+                                        characters = characters + finalChar
+                                    }
+                                },
+                                onBack = { }
+                            )
+                        }
                     }
                 }
                 Phase.PLAY -> PlayScreen(
