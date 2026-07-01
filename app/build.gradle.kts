@@ -7,12 +7,31 @@ android {
     namespace = "com.xnet.archetype"
     compileSdk = 34
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("/home/ubuntu/projects/xnet-keystore/xnet-upload.keystore")
+            storePassword = "UploadXnet2026!"
+            keyAlias = "xnet-upload"
+            keyPassword = "UploadXnet2026!"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.xnet.archetype"
         minSdk = 26
         targetSdk = 34
         versionCode = 2
         versionName = "2.0"
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("release")
+        }
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
     }
 
     buildFeatures { compose = true }

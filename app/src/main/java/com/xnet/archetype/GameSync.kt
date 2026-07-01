@@ -12,7 +12,7 @@ enum class SyncState { DISCONNECTED, HOSTING, JOINED, IN_LOBBY }
 data class LobbyMessage(val sender: String, val text: String, val timestamp: Long = System.currentTimeMillis())
 
 object GameSync {
-    private const val RELAY = "wss://ship.xnet.ngo/ws"
+    private const val RELAY = "wss://arch.xnet.ngo/ws"
     private val client = OkHttpClient.Builder()
         .pingInterval(15, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)

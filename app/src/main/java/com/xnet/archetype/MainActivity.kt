@@ -8,12 +8,30 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import coil.ImageLoader
+import coil.compose.LocalImageLoader
 import kotlinx.coroutines.*
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ArchetypeGame() }
+        setContent {
+            val context = LocalContext.current
+            val imageLoader = remember {
+                ImageLoader.Builder(context)
+                    .okHttpClient(OkHttpClient.Builder()
+                        .connectTimeout(30, TimeUnit.SECONDS)
+                        .readTimeout(60, TimeUnit.SECONDS)
+                        .build())
+                    .crossfade(true)
+                    .build()
+            }
+            CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+                ArchetypeGame()
+            }
+        }
     }
 }
 
@@ -203,7 +221,11 @@ fun ArchetypeGame() {
 
     // Broadcast on every phase/state change when host
     LaunchedEffect(phase, turnCount, characters.size, scene) {
-        if (isHost && GameSync.state != SyncState.DISCONNECTED && phase != Phase.MENU) {
+        if (isHost && GameSync.state != SyncState.DISCONNECTED && phase != Phase.MENU && phase != Phase.CHARACTERS) {
+            broadcastState()
+        }
+        // During character creation, only broadcast when all are in
+        if (isHost && GameSync.state != SyncState.DISCONNECTED && phase == Phase.CHARACTERS && characters.size >= playerCount) {
             broadcastState()
         }
     }
@@ -248,7 +270,7 @@ fun ArchetypeGame() {
                             imgUrl = Nova.characterImageUrl(name, traits, flaws, scene, gender)
                         }
                         val char = GameCharacter(name, traits, flaws, c.getString("wildcard"), role, imgUrl)
-                        characters = characters + char
+                        characters = (characters + char).sortedBy { ch -> activeRoles.indexOfFirst { it == ch.createdBy }.let { if (it == -1) 99 else it } }
                     }
                 }
                 "game_state" -> {
@@ -273,7 +295,7 @@ fun ArchetypeGame() {
                                 Role.valueOf(c.getString("createdBy")),
                                 c.getString("img").ifBlank { null }))
                         }
-                        characters = newChars
+                        characters = newChars.sortedBy { c -> activeRoles.indexOfFirst { it == c.createdBy }.let { if (it == -1) 99 else it } }
                         val sa = msg.getJSONArray("story")
                         val newStory = mutableListOf<StoryEntry>()
                         for (i in 0 until sa.length()) {
@@ -411,6 +433,7 @@ fun ArchetypeGame() {
                                     }
                                 } else if (characters.size >= playerCount) {
                                     addSystem("Characters ready. Begin! Tap ⚡ for conflict, ✦ for a story spark.")
+                                    addSystem(characters.joinToString(" | ") { "${it.createdBy.label}→${it.name}${if (it.imageUrl != null) " ✓img" else " ✗img"}" })
                                     phase = Phase.PLAY
                                     currentRole = activeRoles.first()
                                 }

@@ -176,7 +176,8 @@ Rules:
     fun characterImageUrl(name: String, traits: List<String>, flaws: List<String>, scene: String, creatorGender: Gender): String {
         val genderStr = if (creatorGender == Gender.MALE) "male" else "female"
         val prompt = "Fantasy character portrait of $name, a $genderStr character in a $scene setting, personality: ${traits.joinToString()} but also ${flaws.joinToString()}, dramatic lighting, painterly style, dark background, detailed face"
-        return "$IMAGE_BASE/${java.net.URLEncoder.encode(prompt, "UTF-8")}?width=512&height=512&model=flux&nologo=true"
+        val seed = (name.hashCode() and 0x7FFFFFFF)
+        return "$IMAGE_BASE/${java.net.URLEncoder.encode(prompt, "UTF-8")}?width=512&height=512&model=flux&nologo=true&seed=$seed"
     }
 
     fun sceneImageUrl(description: String): String {
